@@ -1,0 +1,10 @@
+[gd_resource type="Resource" script_class="ShipPartDefinition" format=3 uid="uid://b5n1immpphs0w"]
+
+[ext_resource type="Script" uid="uid://c2851wijdtrm3" path="res://data/scripts/ship/parts/ShipPartDefinition.cs" id="1_definition"]
+[ext_resource type="Script" uid="uid://d2uc37f7sj0qa" path="res://data/scripts/ship/parts/MountPortDefinition.cs" id="2_port"]
+[ext_resource type="Script" uid="uid://bywjsebvpi3eo" path="res://data/scripts/ship/parts/PartCapability.cs" id="3_capability"]
+
+[sub_resource type="RectangleShape2D" id="RectangleShape2D_k1vj1"]
+
+[resource]
+script = ExtResource("1_definition")

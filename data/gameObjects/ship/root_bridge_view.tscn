@@ -1,0 +1,6 @@
+[gd_scene format=3 uid="uid://c5j62v8rcb4e2"]
+
+[ext_resource type="Script" path="res://data/scripts/ship/view/ShipPartView.cs" id="1_part_view"]
+
+[node name="root_bridge" type="Node2D" unique_id=1733325289]
+script = ExtResource("1_part_view")

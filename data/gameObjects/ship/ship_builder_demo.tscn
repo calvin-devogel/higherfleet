@@ -1,0 +1,10 @@
+[gd_scene load_steps=3 format=3 uid="uid://nf6fgo2h8s8j"]
+
+[ext_resource type="Script" uid="uid://buh8s4j6bmei7" path="res://data/scripts/ship/view/ShipBuilderDemo.cs" id="1_builder"]
+[ext_resource type="Script" uid="uid://brn4ehu7t14yc" path="res://data/scripts/ship/view/ShipAssembly.cs" id="2_ship"]
+
+[node name="ShipBuilderDemo" type="Node2D" unique_id=410940690]
+script = ExtResource("1_builder")
+
+[node name="ShipAssembly" type="Node2D" parent="." unique_id=498462279]
+script = ExtResource("2_ship")

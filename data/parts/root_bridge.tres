@@ -1,0 +1,127 @@
+[gd_resource type="Resource" script_class="ShipPartDefinition" load_steps=21 format=3]
+
+[ext_resource type="Script" path="res://data/scripts/ship/parts/ShipPartDefinition.cs" id="1_definition"]
+[ext_resource type="Script" path="res://data/scripts/ship/parts/MountPortDefinition.cs" id="2_port"]
+[ext_resource type="Script" path="res://data/scripts/ship/parts/PartCapability.cs" id="3_capability"]
+[ext_resource type="Script" path="res://data/scripts/ship/parts/CommandCapability.cs" id="4_command"]
+[ext_resource type="Script" path="res://data/scripts/ship/parts/StructuralCapability.cs" id="5_structural"]
+
+[sub_resource type="RectangleShape2D" id="Footprint"]
+size = Vector2(256, 256)
+
+[sub_resource type="Resource" id="Command"]
+script = ExtResource("4_command")
+minimum_crew = 0
+
+[sub_resource type="Resource" id="Structure"]
+script = ExtResource("5_structural")
+structural_strength = 0.0
+
+[sub_resource type="Resource" id="PortNorth"]
+script = ExtResource("2_port")
+port_id = "north"
+compatibility_class = "structural"
+size = 1
+local_position = Vector2(0, -128)
+facing = 0
+
+[sub_resource type="Resource" id="PortEast"]
+script = ExtResource("2_port")
+port_id = "east"
+compatibility_class = "structural"
+size = 1
+local_position = Vector2(128, 0)
+facing = 1
+
+[sub_resource type="Resource" id="PortSouth"]
+script = ExtResource("2_port")
+port_id = "south"
+compatibility_class = "structural"
+size = 1
+local_position = Vector2(0, 128)
+facing = 2
+
+[sub_resource type="Resource" id="PortWest"]
+script = ExtResource("2_port")
+port_id = "west"
+compatibility_class = "structural"
+size = 1
+local_position = Vector2(-128, 0)
+facing = 3
+
+[sub_resource type="Resource" id="PortNorthHalfLeft"]
+script = ExtResource("2_port")
+port_id = "north-half-left"
+compatibility_class = "structural-half"
+size = 1
+local_position = Vector2(-64, -128)
+facing = 0
+
+[sub_resource type="Resource" id="PortNorthHalfRight"]
+script = ExtResource("2_port")
+port_id = "north-half-right"
+compatibility_class = "structural-half"
+size = 1
+local_position = Vector2(64, -128)
+facing = 0
+
+[sub_resource type="Resource" id="PortEastHalfTop"]
+script = ExtResource("2_port")
+port_id = "east-half-top"
+compatibility_class = "structural-half"
+size = 1
+local_position = Vector2(128, -64)
+facing = 1
+
+[sub_resource type="Resource" id="PortEastHalfBottom"]
+script = ExtResource("2_port")
+port_id = "east-half-bottom"
+compatibility_class = "structural-half"
+size = 1
+local_position = Vector2(128, 64)
+facing = 1
+
+[sub_resource type="Resource" id="PortSouthHalfLeft"]
+script = ExtResource("2_port")
+port_id = "south-half-left"
+compatibility_class = "structural-half"
+size = 1
+local_position = Vector2(-64, 128)
+facing = 2
+
+[sub_resource type="Resource" id="PortSouthHalfRight"]
+script = ExtResource("2_port")
+port_id = "south-half-right"
+compatibility_class = "structural-half"
+size = 1
+local_position = Vector2(64, 128)
+facing = 2
+
+[sub_resource type="Resource" id="PortWestHalfTop"]
+script = ExtResource("2_port")
+port_id = "west-half-top"
+compatibility_class = "structural-half"
+size = 1
+local_position = Vector2(-128, -64)
+facing = 3
+
+[sub_resource type="Resource" id="PortWestHalfBottom"]
+script = ExtResource("2_port")
+port_id = "west-half-bottom"
+compatibility_class = "structural-half"
+size = 1
+local_position = Vector2(-128, 64)
+facing = 3
+
+[resource]
+script = ExtResource("1_definition")
+part_id = "bridge_cic_root"
+display_name = "Bridge"
+description = "The ship's command center and unique root part."
+tags = Array[String](["root", "command", "structural"])
+mass = 1600.0
+build_cost = 0.0
+allowed_rotations_degrees = Array[int]([0, 90, 180, 270])
+footprint = SubResource("Footprint")
+mount_ports = Array[MountPortDefinition]([SubResource("PortNorth"), SubResource("PortEast"), SubResource("PortSouth"), SubResource("PortWest"), SubResource("PortNorthHalfLeft"), SubResource("PortNorthHalfRight"), SubResource("PortEastHalfTop"), SubResource("PortEastHalfBottom"), SubResource("PortSouthHalfLeft"), SubResource("PortSouthHalfRight"), SubResource("PortWestHalfTop"), SubResource("PortWestHalfBottom")])
+capabilities = Array[PartCapability]([SubResource("Command"), SubResource("Structure")])
