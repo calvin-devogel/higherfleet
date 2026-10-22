@@ -2249,7 +2249,7 @@ public partial class ShipAssembly : Node2D
 		{
 			Size = new Vector2(256, large ? 256 : 128)
 		};
-		const float portOffset = 128;
+		const float portOffset = 64;
 		definition.LogisticsPorts.Add(CreateLogisticsPort(
 			"power-out",
 			LogisticsSystem.Power,

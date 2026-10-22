@@ -116,10 +116,13 @@ public partial class ShipBuilderRegressionTests : Node
 		LogisticsPortDefinition fuel = generator.Definition.LogisticsPorts.Single(port =>
 			port.System == LogisticsSystem.Fuel);
 		Vector2 size = ((RectangleShape2D)generator.Definition.Footprint).Size;
-		Require(power.LocalPosition == new Vector2(-size.X / 2, 0),
-			"Generator power output must be centered on its left face.");
-		Require(fuel.LocalPosition == new Vector2(size.X / 2, 0),
-			"Generator fuel input must be centered on the opposite, right face.");
+		Require(power.LocalPosition == new Vector2(-64, 0),
+			"Generator power output must be inside the block on its left side.");
+		Require(fuel.LocalPosition == new Vector2(64, 0),
+			"Generator fuel input must be inside the block on its opposite, right side.");
+		Require(Mathf.Abs(power.LocalPosition.X) < size.X / 2
+			&& Mathf.Abs(fuel.LocalPosition.X) < size.X / 2,
+			"Generator logistics ports must stay inside the component footprint.");
 		Require(generator.GetWorldLogisticsPortPosition(power)
 			!= generator.GetWorldLogisticsPortPosition(fuel),
 			"Rotated generator logistics ports must remain separated.");
@@ -159,7 +162,7 @@ public partial class ShipBuilderRegressionTests : Node
 		};
 		hull.Capabilities.Add(new StructuralCapability());
 		ship.Design.AddPart(new ShipPartInstance("test-hull", hull, Vector2.Zero, 0));
-		ship.BeginNewPowerCorePlacement(new Vector2(-256, -384));
+		ship.BeginNewPowerCorePlacement(new Vector2(-320, -384));
 		ShipPartInstance source = Drop(ship);
 		ship.BeginLogisticsRouting(LogisticsSystem.Power);
 		return source;
