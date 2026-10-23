@@ -14,7 +14,7 @@ The first useful builder should let a player assemble and edit a ship with a sma
 
 - **View:** 2D side view.
 - **Physical attachment:** Parts connect at named snap points/ports.
-- **Structural geometry and terminology:** A half-size grid cell is 1×1 (128×128 design units); a full-size hull part is 2×2 (256×256). The catalog also includes 2×1, triangular, notched, 4×2, and 4×4 hull footprints. Polygonal footprints govern drawing and hit-testing. The 4×2 hull uses a 512×256 footprint and an estimated 3.2 t mass; the 4×4 hull uses a 512×512 footprint and an estimated 6.4 t mass. Structural ports are named by their grid scale: 2×2 and 1×1.
+- **Structural geometry and terminology:** A half-size grid cell is 1×1 (128×128 design units); a full-size hull part is 2×2 (256×256). The catalog also includes 2×1, triangular, notched, 4×2, and 4×4 hull footprints. Polygonal footprints govern drawing and hit-testing. The 4×2 hull uses a 512×256 footprint and an estimated 3.2 t mass; the 4×4 hull uses a 512×512 footprint and an estimated 6.4 t mass, with centered 2×2 attachment ports on each face. Structural ports are named by their grid scale: 2×2 and 1×1.
 - **Initial ship scale:** One full square tile represents a 10 m × 10 m side-view compartment; a 0.5×1 tile compartment is 5 m × 10 m and has a 25-person capacity at 2 m² per person.
 - **Initial hull mass estimate:** A full tile is approximately 1.6 metric tonnes and a 0.5×1 tile frame approximately 1.1 tonnes, using a hollow steel-frame estimate. These are tuning estimates, not simulation-grade engineering values.
 - **Catalog layout:** The component catalog sits in a vertically scrollable right sidebar, grouped by component class. Hull choices are listed directly in the HULL pop-up by 1×1/2×2 grid scale; design help and stats remain in the upper-left panel. The ship canvas is centered in the area left of the sidebar, and the currently held component is named in the selection readout and gets a bright outline.
@@ -27,12 +27,16 @@ The first useful builder should let a player assemble and edit a ship with a sma
 - **Placement interaction:** Choose a part, then place it freely or snap it to a compatible port.
 - **Structural port sizes:** 2×2 parts expose center ports and paired 1×1 ports on each face. 1×1 parts use only 1×1 ports.
 - **Validation style:** Advisory. Show clear warnings and permit questionable designs where practical instead of blocking every placement.
-- **First prototype goal:** Place, rotate, move, and delete parts. Multi-select and copy/paste are also desired editing controls.
+- **First prototype goal:** Place, rotate, move, and delete parts. Control-click (Command-click on macOS) an already-placed non-command part to hold a copy while keeping the source in place. Multi-select and copy/paste are also desired editing controls.
 - **First engineering layer:** Staged, explainable summaries and warnings, followed by deeper systems.
 - **Physical and logistical connections:** Physical snap points mount parts only. System routes are a separate, later builder layer.
 - **Future logistics direction:** Players route systems through compartments, junctions, and shared networks. Dedicated or backup routes should be possible, and route/part placement should have engineering and gameplay consequences.
 - **Project approach:** Replace builder logic and architecture; retain useful existing art and part scenes.
 - **Design priority:** Detailed engineering and tradeoffs that can lead to meaningfully different combat designs.
+
+### Ship persistence
+
+Save and load versioned JSON designs from the game's persistent `user://ship_designs` directory. Saves preserve parts, rotations, physical connections, logistics routes, and routing markers; loading validates references before replacing the current design.
 
 ### Recommended, but not yet confirmed
 

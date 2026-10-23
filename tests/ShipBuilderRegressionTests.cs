@@ -1,4 +1,6 @@
 using System;
+using System.Collections.Generic;
+using System.IO;
 using System.Linq;
 using Godot;
 using Higherfleet.Ships.Model;
@@ -13,6 +15,10 @@ public partial class ShipBuilderRegressionTests : Node
 	public override void _Ready()
 	{
 		Run("component sizes, rotations, ports and mounting", CheckComponents);
+		Run("centered 2x2 ports on 4x4 hull", CheckLargeHullCenteredPorts);
+		Run("subassembly caching and group pickup", CheckSubassemblyCaching);
+		Run("control-click copies placed parts", CheckPartCopying);
+		Run("ship design persistence round trip", CheckPersistence);
 		Run("splitting at bends and inside segments", CheckSplitting);
 		Run("open conduit, extension, branch and consumer", CheckNetworkEditing);
 		Run("joining an existing segment and restoring picked-up endpoints", CheckJoining);
@@ -107,6 +113,186 @@ public partial class ShipBuilderRegressionTests : Node
 			"Large tank must have a fuel port.");
 		ship.BeginNewFuelTankPlacement(new Vector2(2304, 0));
 		RequireSize(Drop(ship), new Vector2(256, 128));
+	}
+
+	private static void CheckSubassemblyCaching(ShipAssembly ship)
+	{
+		IReadOnlyList<ShipSubassembly> initial = ship.Design.GetSubassemblies();
+		Require(initial.Count == 1, "A new ship must contain only its root subassembly.");
+		Require(ReferenceEquals(initial, ship.Design.GetSubassemblies()),
+			"Unchanged designs must reuse their computed subassemblies.");
+
+		ship.BeginNewStructuralHullPlacement(new Vector2(768, 0));
+		ShipPartInstance first = Drop(ship);
+		ship.BeginNewStructuralHullPlacement(new Vector2(1536, 0));
+		ShipPartInstance second = Drop(ship);
+		Require(ship.Design.GetSubassemblies().Count == 3,
+			"Adding disconnected parts must invalidate the cached subassemblies.");
+
+		PhysicalConnection connection = new(
+			new PhysicalPortReference(first.InstanceId, "test-port"),
+			new PhysicalPortReference(second.InstanceId, "test-port"));
+		ship.Design.AddConnection(connection);
+		Require(ship.Design.GetSubassemblies().Count == 2,
+			"Adding a connection must merge connected parts into one subassembly.");
+		Require(ship.TryPickUpPartAt(first.Position, true, out string status), status);
+		Require(ship.HeldPartDisplayName == "2 parts",
+			"Picking up a connected structural group must carry the whole subassembly.");
+		Require(ship.Design.GetSubassemblies().Count == 1,
+			"Removing a picked-up group must invalidate the cached subassemblies.");
+		ship.CancelHeldPartPlacement();
+		Require(ship.Design.GetSubassemblies().Count == 2,
+			"Cancelling group pickup must restore its connected subassembly.");
+
+		Require(ship.Design.RemoveConnection(connection),
+			"Removing the test connection must succeed.");
+		Require(ship.Design.GetSubassemblies().Count == 3,
+			"Removing a connection must invalidate the cached subassemblies.");
+	}
+
+	private static void CheckLargeHullCenteredPorts(ShipAssembly ship)
+	{
+		ship.BeginNewStructuralLargePlacement(Vector2.Zero);
+		ShipPartInstance largeHull = Drop(ship);
+		foreach ((string portId, Vector2 position, MountFacing facing) in new[]
+		{
+			("north-center", new Vector2(0, -256), MountFacing.North),
+			("east-center", new Vector2(256, 0), MountFacing.East),
+			("south-center", new Vector2(0, 256), MountFacing.South),
+			("west-center", new Vector2(-256, 0), MountFacing.West)
+		})
+		{
+			MountPortDefinition port = largeHull.Definition.FindMountPort(portId);
+			Require(port != null && port.LocalPosition == position && port.Facing == facing,
+				$"4×4 hull must have a centered 2×2 {facing} attachment port.");
+		}
+
+		ship.BeginNewStructuralHullPlacement(new Vector2(0, -384));
+		ShipPartInstance hull = Drop(ship);
+		Require(ship.Design.Connections.Any(connection =>
+			connection.First.PartInstanceId == largeHull.InstanceId
+				&& connection.First.PortId == "north-center"
+			|| connection.Second.PartInstanceId == largeHull.InstanceId
+				&& connection.Second.PortId == "north-center"),
+			"A 2×2 hull must attach to the center of the 4×4 hull's north face.");
+		Require(hull.Position == new Vector2(0, -384),
+			"The centered attachment must place the 2×2 hull at the center of the face.");
+	}
+
+	private static void CheckPersistence(ShipAssembly ship)
+	{
+		ship.BeginNewPowerCorePlacement(new Vector2(-64, 0));
+		ShipPartInstance generator = Drop(ship);
+		ShipPartInstance root = ship.Design.Parts.Single(part =>
+			part.InstanceId == ship.Design.RootPartInstanceId);
+		LogisticsPortDefinition sourcePort = generator.Definition.LogisticsPorts.Single(port =>
+			port.System == LogisticsSystem.Power && port.Direction == LogisticsPortDirection.Source);
+		LogisticsPortDefinition consumerPort = root.Definition.LogisticsPorts.Single(port =>
+			port.System == LogisticsSystem.Power && port.Direction == LogisticsPortDirection.Consumer);
+		ship.Design.AddLogisticsRoute(new LogisticsRoute(
+			"saved-power-route",
+			LogisticsSystem.Power,
+			new LogisticsEndpoint(Vector2.Zero,
+				new LogisticsPortReference(generator.InstanceId, sourcePort.PortId)),
+			new LogisticsEndpoint(Vector2.Zero,
+				new LogisticsPortReference(root.InstanceId, consumerPort.PortId)),
+			new[] { new Vector2(64, -64), new Vector2(0, -128) }));
+		ship.Design.AddLogisticsJunction(new LogisticsJunction(
+			"saved-junction", LogisticsSystem.Power, new Vector2(64, -64)));
+		ship.Design.AddLogisticsPassOver(new LogisticsPassOver(
+			"saved-pass-over", LogisticsSystem.Fuel, new Vector2(128, -64)));
+		ship.Design.AddLogisticsPassThrough(new LogisticsPassThrough(
+			"saved-pass-through", LogisticsSystem.Fuel, new Vector2(192, -64)));
+
+		const string path = "user://ship_builder_persistence_test.json";
+		try
+		{
+			ShipDesignPersistence.SaveToFile(path, ship.Design);
+			ShipDesignPersistence.SaveToFile(path, ship.Design);
+			ShipDesign loaded = ShipDesignPersistence.LoadFromFile(path, ship.ResolvePartDefinition);
+			Require(loaded.DesignId == ship.Design.DesignId
+				&& loaded.RootPartInstanceId == ship.Design.RootPartInstanceId,
+				"Loading must preserve the design and root IDs.");
+			Require(loaded.Parts.Count == ship.Design.Parts.Count
+				&& loaded.Parts.Zip(ship.Design.Parts).All(pair =>
+					pair.First.InstanceId == pair.Second.InstanceId
+					&& pair.First.Definition.PartId == pair.Second.Definition.PartId
+					&& pair.First.Position == pair.Second.Position
+					&& pair.First.RotationDegrees == pair.Second.RotationDegrees),
+				"Loading must preserve part definitions, placements, and rotations.");
+			Require(loaded.Connections.Count == ship.Design.Connections.Count,
+				"Loading must preserve physical connections.");
+			Require(loaded.LogisticsRoutes.Count == 1
+				&& loaded.LogisticsRoutes[0].RouteId == "saved-power-route"
+				&& loaded.LogisticsRoutes[0].Start.Port?.PartInstanceId == generator.InstanceId
+				&& loaded.LogisticsRoutes[0].End.Port?.PartInstanceId == root.InstanceId
+				&& loaded.LogisticsRoutes[0].Waypoints.SequenceEqual(
+					ship.Design.LogisticsRoutes[0].Waypoints),
+				"Loading must preserve route endpoints and waypoints.");
+			Require(loaded.LogisticsJunctions.Single().JunctionId == "saved-junction"
+				&& loaded.LogisticsPassOvers.Single().MarkerId == "saved-pass-over"
+				&& loaded.LogisticsPassThroughs.Single().MarkerId == "saved-pass-through",
+				"Loading must preserve all logistics routing markers.");
+			ship.ReplaceDesign(loaded);
+			ship.BeginNewPowerCorePlacement(new Vector2(768, 0));
+			ShipPartInstance nextGenerator = Drop(ship);
+			Require(nextGenerator.InstanceId != generator.InstanceId,
+				"Newly placed parts after loading must not reuse existing instance IDs.");
+			bool malformedDataRejected = false;
+			try
+			{
+				ShipDesignPersistence.Deserialize(
+					"{\"FormatVersion\":1,\"DesignId\":\"missing-fields\"}",
+					ship.ResolvePartDefinition);
+			}
+			catch (InvalidDataException)
+			{
+				malformedDataRejected = true;
+			}
+
+			Require(malformedDataRejected,
+				"Loading must reject files with missing required design data.");
+		}
+		finally
+		{
+			string absolutePath = ProjectSettings.GlobalizePath(path);
+			if (File.Exists(absolutePath))
+				File.Delete(absolutePath);
+		}
+	}
+
+	private static void CheckPartCopying(ShipAssembly ship)
+	{
+		ship.BeginNewPowerCorePlacement(new Vector2(-64, 0));
+		ShipPartInstance originalModule = Drop(ship);
+		int partsBeforeCopy = ship.GetPartCount();
+		Require(ship.TryCopyPartAt(originalModule.Position, out string status), status);
+		Require(ship.IsHoldingPart && ship.GetPartCount() == partsBeforeCopy,
+			"Copying an internal module must leave the source placed while holding its copy.");
+		ship.UpdateHeldPartPlacement(new Vector2(640, 0));
+		Require(ship.TryDropHeldPart(false, out status), status);
+		ShipPartInstance copiedModule = ship.Design.Parts.Single(part =>
+			part.InstanceId != originalModule.InstanceId
+			&& part.Definition.PartId == originalModule.Definition.PartId);
+		Require(copiedModule.Position == new Vector2(640, 0)
+			&& ship.Design.Parts.Contains(originalModule),
+			"Copying an internal module must create a distinct part without moving the original.");
+
+		ship.BeginNewStructuralHullPlacement(new Vector2(1024, 0));
+		ShipPartInstance originalHull = Drop(ship);
+		int partsBeforeHullCopy = ship.GetPartCount();
+		Require(ship.TryCopyPartAt(originalHull.Position, out status), status);
+		Require(ship.GetPartCount() == partsBeforeHullCopy,
+			"Copying a placed hull must not remove its source.");
+		ship.UpdateHeldPartPlacement(new Vector2(1536, 0));
+		Require(ship.TryDropHeldPart(false, out status), status);
+		ShipPartInstance copiedHull = ship.Design.Parts.Single(part =>
+			part.InstanceId != originalHull.InstanceId
+			&& part.Definition.PartId == originalHull.Definition.PartId
+			&& part.Position == new Vector2(1536, 0));
+		Require(ship.Design.Parts.Contains(originalHull)
+			&& copiedHull.InstanceId != originalHull.InstanceId,
+			"Copying a placed hull must add a new instance and preserve the original.");
 	}
 
 	private static void RequireGeneratorPortsAreOpposite(ShipPartInstance generator)

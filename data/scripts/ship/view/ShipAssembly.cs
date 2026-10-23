@@ -36,6 +36,7 @@ public partial class ShipAssembly : Node2D
 	private ShipPartDefinition _largeGeneratorDefinition;
 	private ShipPartDefinition _thrusterDefinition;
 	private ShipPartDefinition _gimballedThrusterDefinition;
+	private ShipPartDefinition[] _partDefinitions = System.Array.Empty<ShipPartDefinition>();
 	private bool _isHoldingPart;
 	private Vector2 _previewPosition;
 	private Vector2 _heldCursorPosition;
@@ -44,7 +45,13 @@ public partial class ShipAssembly : Node2D
 	private string _heldPartInstanceId = string.Empty;
 	private ShipPartDefinition _heldPartDefinition;
 	private List<ShipPartInstance> _pickedUpParts = new();
+	private List<ShipPartInstance> _heldPreviewParts = new();
 	private List<ShipPartInstance> _originalPickedUpParts = new();
+	private readonly List<GroupPlacementPort> _groupPlacementTargetPorts = new();
+	private readonly HashSet<(string PartId, string PortId)> _availableTargetPorts = new();
+	private readonly HashSet<PortCompatibilityKey> _heldPortKeys = new();
+	private readonly HashSet<PortCompatibilityKey> _targetPortKeys = new();
+	private int _heldTargetStructureRevision = -1;
 	private string _heldAnchorInstanceId = string.Empty;
 	private Vector2 _heldAnchorCursorOffset;
 	private List<PhysicalConnection> _pickedUpConnections = new();
@@ -144,10 +151,50 @@ public partial class ShipAssembly : Node2D
 			AddInternalSupportPorts(hullDefinition);
 		}
 
+		_partDefinitions = new[]
+		{
+			_rootDefinition,
+			_structuralDefinition,
+			_halfStructuralDefinition,
+			_halfStructuralLongDefinition,
+			_structuralTriangleDefinition,
+			_halfStructuralTriangleDefinition,
+			_structuralNotchedDefinition,
+			_structuralLargeDefinition,
+			_structuralWideDefinition,
+			_fuelTankDefinition,
+			_largeFuelTankDefinition,
+			_powerCoreDefinition,
+			_largeGeneratorDefinition,
+			_thrusterDefinition,
+			_gimballedThrusterDefinition
+		};
+
 		Design = new ShipDesign("player-ship");
 		ShipPartInstance root = new("root", _rootDefinition, Vector2.Zero, 0);
 		Design.AddPart(root);
 		Design.SetRootPart(root.InstanceId);
+		QueueRedraw();
+	}
+
+	public ShipPartDefinition ResolvePartDefinition(string partId)
+	{
+		return System.Array.Find(_partDefinitions, definition => definition.PartId == partId);
+	}
+
+	public void ReplaceDesign(ShipDesign design)
+	{
+		ArgumentNullException.ThrowIfNull(design);
+		if (_isHoldingPart)
+			CancelHeldPartPlacement();
+
+		_activeRoutingSystem = null;
+		_pendingRouteStart = null;
+		_pendingRouteWaypoints.Clear();
+		Design = design;
+		_nextPartNumber = 1;
+		_nextLogisticsRouteNumber = 1;
+		_heldTargetStructureRevision = -1;
 		QueueRedraw();
 	}
 
@@ -471,7 +518,7 @@ public partial class ShipAssembly : Node2D
 	{
 		LogisticsSystem system = _activeRoutingSystem.Value;
 		LogisticsRoute route = new(
-			$"logistics-route-{_nextLogisticsRouteNumber++}",
+			NextLogisticsId("logistics-route"),
 			system, _pendingRouteStart.Value, end, waypoints);
 		IReadOnlyList<Vector2> points = route.GetPoints(Design.Parts);
 		for (int i = 0; i < points.Count - 1; i++)
@@ -515,7 +562,7 @@ public partial class ShipAssembly : Node2D
 				marker.System == system && marker.Position == point))
 			{
 				Design.AddLogisticsJunction(new LogisticsJunction(
-					$"logistics-junction-{_nextLogisticsRouteNumber++}", system, point));
+					NextLogisticsId("logistics-junction"), system, point));
 			}
 		}
 
@@ -560,7 +607,7 @@ public partial class ShipAssembly : Node2D
 		}
 
 		Design.AddLogisticsJunction(new LogisticsJunction(
-			$"logistics-junction-{_nextLogisticsRouteNumber++}",
+			NextLogisticsId("logistics-junction"),
 			_activeRoutingSystem.Value,
 			junctionPosition));
 		status = $"{_activeRoutingSystem.Value} junction added.";
@@ -602,7 +649,7 @@ public partial class ShipAssembly : Node2D
 		}
 
 		Design.AddLogisticsPassOver(new LogisticsPassOver(
-			$"logistics-pass-over-{_nextLogisticsRouteNumber++}",
+			NextLogisticsId("logistics-pass-over"),
 			_activeRoutingSystem.Value,
 			markerPosition));
 		status = $"{_activeRoutingSystem.Value} pass-over marker added.";
@@ -636,7 +683,7 @@ public partial class ShipAssembly : Node2D
 		}
 
 		Design.AddLogisticsPassThrough(new LogisticsPassThrough(
-			$"logistics-pass-through-{_nextLogisticsRouteNumber++}",
+			NextLogisticsId("logistics-pass-through"),
 			_activeRoutingSystem.Value,
 			markerPosition));
 		status = $"{_activeRoutingSystem.Value} pass-through marker added.";
@@ -748,6 +795,7 @@ public partial class ShipAssembly : Node2D
 		}
 
 		_heldRotationDegrees = normalizedRotation;
+		RefreshHeldPortKeys();
 		UpdateHeldPartPlacement(_heldCursorPosition);
 		return true;
 	}
@@ -770,7 +818,7 @@ public partial class ShipAssembly : Node2D
 		_pendingRouteStart = null;
 		_pendingRouteWaypoints.Clear();
 		_isHoldingPart = true;
-		_heldPartInstanceId = $"{definition.PartId}-{_nextPartNumber++}";
+		_heldPartInstanceId = NextPartInstanceId(definition);
 		_heldPartDefinition = definition;
 		_heldCursorPosition = cursorPosition;
 		_heldRotationDegrees = 0;
@@ -779,6 +827,7 @@ public partial class ShipAssembly : Node2D
 		_heldAnchorInstanceId = string.Empty;
 		_pickedUpConnections.Clear();
 		_pickedUpLogisticsRoutes.Clear();
+		RefreshHeldPortKeys();
 		UpdateHeldPartPlacement(cursorPosition);
 	}
 
@@ -800,6 +849,7 @@ public partial class ShipAssembly : Node2D
 			_currentPlacement = FindPlacementTarget(_heldPartDefinition, cursorPosition);
 			_previewPosition = _currentPlacement?.PartPosition ?? cursorPosition;
 		}
+		RefreshHeldPreviewParts();
 		QueueRedraw();
 	}
 
@@ -858,7 +908,7 @@ public partial class ShipAssembly : Node2D
 			&& _heldPartDefinition.Tags.Contains("hull");
 		if (continuePlacingHull)
 		{
-			_heldPartInstanceId = $"{_heldPartDefinition.PartId}-{_nextPartNumber++}";
+			_heldPartInstanceId = NextPartInstanceId(_heldPartDefinition);
 			UpdateHeldPartPlacement(_heldCursorPosition);
 		}
 		else
@@ -939,6 +989,7 @@ public partial class ShipAssembly : Node2D
 		_heldCursorPosition = localPosition;
 		_heldRotationDegrees = hitPart.RotationDegrees;
 		_isHoldingPart = true;
+		RefreshHeldPortKeys();
 		UpdateHeldPartPlacement(localPosition);
 		QueueRedraw();
 		string heldDescription = pickUpGroup
@@ -947,6 +998,51 @@ public partial class ShipAssembly : Node2D
 				: $"the {connectedGroup.Parts.Count}-part subassembly"
 			: hitPart.Definition.DisplayName;
 		reason = $"Picked up {heldDescription}.";
+		return true;
+	}
+
+	public bool TryCopyPartAt(Vector2 localPosition, out string reason)
+	{
+		if (Design == null || _isHoldingPart)
+		{
+			reason = "Finish the held part before copying another one.";
+			return false;
+		}
+
+		ShipPartInstance sourcePart = FindPartAt(localPosition);
+		if (sourcePart == null)
+		{
+			reason = "Control-click a placed part to copy it.";
+			return false;
+		}
+
+		if (sourcePart.InstanceId == Design.RootPartInstanceId
+			|| sourcePart.Definition.HasCapability<CommandCapability>())
+		{
+			reason = "The Bridge/CIC cannot be copied because a ship can have only one command part.";
+			return false;
+		}
+
+		ShipPartInstance copiedPart = new(
+			NextPartInstanceId(sourcePart.Definition),
+			sourcePart.Definition,
+			sourcePart.Position,
+			sourcePart.RotationDegrees);
+		_pickedUpParts = new List<ShipPartInstance> { copiedPart };
+		_originalPickedUpParts.Clear();
+		_heldAnchorInstanceId = copiedPart.InstanceId;
+		_heldAnchorCursorOffset = localPosition - sourcePart.Position;
+		_pickedUpConnections.Clear();
+		_pickedUpLogisticsRoutes.Clear();
+		_heldPartInstanceId = copiedPart.InstanceId;
+		_heldPartDefinition = copiedPart.Definition;
+		_heldCursorPosition = localPosition;
+		_heldRotationDegrees = copiedPart.RotationDegrees;
+		_isHoldingPart = true;
+		RefreshHeldPortKeys();
+		UpdateHeldPartPlacement(localPosition);
+		QueueRedraw();
+		reason = $"Copying {sourcePart.Definition.DisplayName}.";
 		return true;
 	}
 
@@ -1311,14 +1407,18 @@ public partial class ShipAssembly : Node2D
 		if (!_isHoldingPart || _heldPartDefinition.Tags.Contains("internal"))
 			return;
 
+		EnsureHeldTargetPortCache();
 		foreach (ShipPartInstance part in Design.Parts)
 		{
 			if (part.Definition.Tags.Contains("internal"))
 				continue;
 
-			DrawPartPortRanges(
-				part,
-				port => !IsPortUnavailable(part, port) && HasCompatibleHeldPort(part, port));
+			DrawPartPortRanges(part, port =>
+				_availableTargetPorts.Contains((part.InstanceId, port.PortId))
+				&& _heldPortKeys.Contains(new PortCompatibilityKey(
+					port.Size,
+					port.CompatibilityClass,
+					Opposite(part.GetWorldPortFacing(port)))));
 		}
 
 		foreach (ShipPartInstance heldPart in GetHeldPartsAtPreviewPosition())
@@ -1326,9 +1426,11 @@ public partial class ShipAssembly : Node2D
 			if (heldPart.Definition.Tags.Contains("internal"))
 				continue;
 
-			DrawPartPortRanges(
-				heldPart,
-				port => HasCompatibleTargetPort(heldPart.Definition, port, heldPart.RotationDegrees));
+			DrawPartPortRanges(heldPart, port =>
+				_targetPortKeys.Contains(new PortCompatibilityKey(
+					port.Size,
+					port.CompatibilityClass,
+					RotateFacing(port.Facing, heldPart.RotationDegrees))));
 		}
 	}
 
@@ -1572,6 +1674,7 @@ public partial class ShipAssembly : Node2D
 
 	private PlacementTarget? FindGroupPlacementTarget(ShipPartInstance anchor, Vector2 anchorPosition)
 	{
+		EnsureHeldTargetPortCache();
 		PlacementTarget? nearest = null;
 		float nearestDistanceSquared = SnapRadius * SnapRadius;
 
@@ -1582,102 +1685,35 @@ public partial class ShipAssembly : Node2D
 			{
 				Vector2 rotatedPortPosition = heldPort.LocalPosition
 					.Rotated(Mathf.DegToRad(heldPart.RotationDegrees));
-				foreach (ShipPartInstance targetPart in Design.Parts)
+				foreach (GroupPlacementPort target in _groupPlacementTargetPorts)
 				{
-					foreach (MountPortDefinition targetPort in targetPart.Definition.MountPorts)
-					{
-						if (IsPortUnavailable(targetPart, targetPort)
-							|| !ArePortDefinitionsCompatible(
-								heldPart.Definition,
-								heldPort,
-								heldPart.RotationDegrees,
-								targetPart,
-								targetPort))
-							continue;
+					if (!ArePortTypesCompatible(heldPort, target.Port)
+						|| RotateFacing(heldPort.Facing, heldPart.RotationDegrees)
+							!= Opposite(target.Facing))
+						continue;
 
-						Vector2 targetPosition = targetPart.GetWorldPortPosition(targetPort);
-						Vector2 portDelta = targetPosition
-							- (anchorPosition + relativePosition + rotatedPortPosition);
-						if (Mathf.Abs(portDelta.X) > SnapRadius
-							|| Mathf.Abs(portDelta.Y) > SnapRadius)
-							continue;
+					Vector2 portDelta = target.Position
+						- (anchorPosition + relativePosition + rotatedPortPosition);
+					if (Mathf.Abs(portDelta.X) > SnapRadius
+						|| Mathf.Abs(portDelta.Y) > SnapRadius)
+						continue;
 
-						float distanceSquared = portDelta.LengthSquared();
-						if (distanceSquared > nearestDistanceSquared)
-							continue;
+					float distanceSquared = portDelta.LengthSquared();
+					if (distanceSquared > nearestDistanceSquared)
+						continue;
 
-						nearestDistanceSquared = distanceSquared;
-						nearest = new PlacementTarget(
-							targetPart,
-							targetPort,
-							heldPort,
-							targetPosition - relativePosition - rotatedPortPosition,
-							heldPart.RotationDegrees);
-					}
+					nearestDistanceSquared = distanceSquared;
+					nearest = new PlacementTarget(
+						target.Part,
+						target.Port,
+						heldPort,
+						target.Position - relativePosition - rotatedPortPosition,
+						heldPart.RotationDegrees);
 				}
 			}
 		}
 
 		return nearest;
-	}
-
-	private bool HasCompatibleTargetPort(
-		ShipPartDefinition heldDefinition,
-		MountPortDefinition partPort,
-		int rotationDegrees)
-	{
-		foreach (ShipPartInstance targetPart in Design.Parts)
-		{
-			if (targetPart.Definition.Tags.Contains("internal"))
-				continue;
-
-			foreach (MountPortDefinition targetPort in targetPart.Definition.MountPorts)
-			{
-				if (IsInternalSupportPort(targetPort) || IsPortUnavailable(targetPart, targetPort))
-					continue;
-
-				if (ArePortDefinitionsCompatible(
-					heldDefinition,
-					partPort,
-					rotationDegrees,
-					targetPart,
-					targetPort))
-					return true;
-			}
-		}
-
-		return false;
-	}
-
-	private bool HasCompatibleHeldPort(ShipPartInstance targetPart, MountPortDefinition targetPort)
-	{
-		if (_pickedUpParts.Count > 0)
-		{
-			foreach (ShipPartInstance heldPart in GetHeldPartsAtPreviewPosition())
-			{
-				if (heldPart.Definition.Tags.Contains("internal"))
-					continue;
-
-				foreach (MountPortDefinition partPort in heldPart.Definition.MountPorts)
-				{
-					if (ArePortDefinitionsCompatible(
-						heldPart.Definition,
-						partPort,
-						heldPart.RotationDegrees,
-						targetPart,
-						targetPort))
-						return true;
-				}
-			}
-
-			return false;
-		}
-
-		return FindCompatiblePort(
-			_heldPartDefinition,
-			targetPort,
-			Opposite(targetPart.GetWorldPortFacing(targetPort)),
-			_heldRotationDegrees) != null;
 	}
 
 	private static bool ArePortDefinitionsCompatible(
@@ -1734,23 +1770,58 @@ public partial class ShipAssembly : Node2D
 
 	private List<ShipPartInstance> GetHeldPartsAtPreviewPosition()
 	{
+		return _heldPreviewParts;
+	}
+
+	private void RefreshHeldPreviewParts()
+	{
 		if (_pickedUpParts.Count == 0)
 		{
-			return new List<ShipPartInstance>
+			_heldPreviewParts = new List<ShipPartInstance>
 			{
 				new(_heldPartInstanceId, _heldPartDefinition, _previewPosition, _heldRotationDegrees)
 			};
+			return;
 		}
 
 		ShipPartInstance anchor = FindPickedUpPart(_heldAnchorInstanceId);
 		Vector2 translation = _previewPosition - anchor.Position;
-		return _pickedUpParts
+		_heldPreviewParts = _pickedUpParts
 			.Select(part => new ShipPartInstance(
 				part.InstanceId,
 				part.Definition,
 				part.Position + translation,
 				part.RotationDegrees))
 			.ToList();
+	}
+
+	private void RefreshHeldPortKeys()
+	{
+		_heldPortKeys.Clear();
+		if (_pickedUpParts.Count == 0)
+		{
+			if (_heldPartDefinition == null)
+				return;
+
+			AddHeldPortKeys(_heldPartDefinition, _heldRotationDegrees);
+			return;
+		}
+
+		foreach (ShipPartInstance part in _pickedUpParts)
+			AddHeldPortKeys(part.Definition, part.RotationDegrees);
+	}
+
+	private void AddHeldPortKeys(ShipPartDefinition definition, int rotationDegrees)
+	{
+		if (definition.Tags.Contains("internal"))
+			return;
+
+		foreach (MountPortDefinition port in definition.MountPorts)
+			if (!IsInternalSupportPort(port))
+				_heldPortKeys.Add(new PortCompatibilityKey(
+					port.Size,
+					port.CompatibilityClass,
+					RotateFacing(port.Facing, rotationDegrees)));
 	}
 
 	private static bool ContainsPoint(ShipPartInstance part, Vector2 localPosition)
@@ -1790,11 +1861,40 @@ public partial class ShipAssembly : Node2D
 		_heldCursorPosition = Vector2.Zero;
 		_heldRotationDegrees = 0;
 		_pickedUpParts.Clear();
+		_heldPreviewParts.Clear();
+		_heldPortKeys.Clear();
 		_originalPickedUpParts.Clear();
 		_heldAnchorInstanceId = string.Empty;
 		_heldAnchorCursorOffset = Vector2.Zero;
 		_pickedUpConnections.Clear();
 		_pickedUpLogisticsRoutes.Clear();
+	}
+
+	private string NextPartInstanceId(ShipPartDefinition definition)
+	{
+		string instanceId;
+		do
+		{
+			instanceId = $"{definition.PartId}-{_nextPartNumber++}";
+		}
+		while (Design.Parts.Any(part => part.InstanceId == instanceId));
+
+		return instanceId;
+	}
+
+	private string NextLogisticsId(string prefix)
+	{
+		string id;
+		do
+		{
+			id = $"{prefix}-{_nextLogisticsRouteNumber++}";
+		}
+		while (Design.LogisticsRoutes.Any(route => route.RouteId == id)
+			|| Design.LogisticsJunctions.Any(marker => marker.JunctionId == id)
+			|| Design.LogisticsPassOvers.Any(marker => marker.MarkerId == id)
+			|| Design.LogisticsPassThroughs.Any(marker => marker.MarkerId == id));
+
+		return id;
 	}
 
 	private bool IsPortUnavailable(
@@ -1825,6 +1925,69 @@ public partial class ShipAssembly : Node2D
 		}
 
 		return false;
+	}
+
+	private void EnsureHeldTargetPortCache()
+	{
+		if (_heldTargetStructureRevision == Design.StructureRevision)
+			return;
+
+		_groupPlacementTargetPorts.Clear();
+		_availableTargetPorts.Clear();
+		_targetPortKeys.Clear();
+		HashSet<(string PartId, string PortId)> occupiedPorts = new();
+		foreach (PhysicalConnection connection in Design.Connections)
+		{
+			occupiedPorts.Add((connection.First.PartInstanceId, connection.First.PortId));
+			occupiedPorts.Add((connection.Second.PartInstanceId, connection.Second.PortId));
+		}
+
+		foreach (ShipPartInstance part in Design.Parts)
+		{
+			foreach (MountPortDefinition port in part.Definition.MountPorts)
+			{
+				if (IsPortUnavailable(part, port, occupiedPorts))
+					continue;
+
+				Vector2 position = part.GetWorldPortPosition(port);
+				MountFacing facing = part.GetWorldPortFacing(port);
+				_groupPlacementTargetPorts.Add(new GroupPlacementPort(part, port, position, facing));
+				if (part.Definition.Tags.Contains("internal") || IsInternalSupportPort(port))
+					continue;
+
+				_availableTargetPorts.Add((part.InstanceId, port.PortId));
+				_targetPortKeys.Add(new PortCompatibilityKey(
+					port.Size,
+					port.CompatibilityClass,
+					Opposite(facing)));
+			}
+		}
+
+		_heldTargetStructureRevision = Design.StructureRevision;
+	}
+
+	private bool IsPortUnavailable(
+		ShipPartInstance part,
+		MountPortDefinition port,
+		HashSet<(string PartId, string PortId)> occupiedPorts)
+	{
+		if (IsInternalSupportPort(port))
+		{
+			Vector2 internalAnchorPosition = part.GetWorldPortPosition(port);
+			return part.Definition.MountPorts.Any(candidatePort =>
+				IsInternalSupportPort(candidatePort)
+				&& part.GetWorldPortPosition(candidatePort).DistanceTo(internalAnchorPosition)
+					<= ConnectionPositionTolerance
+				&& occupiedPorts.Contains((part.InstanceId, candidatePort.PortId)));
+		}
+
+		if (occupiedPorts.Contains((part.InstanceId, port.PortId)))
+			return true;
+
+		Vector2 portPosition = part.GetWorldPortPosition(port);
+		return Design.Parts.Any(otherPart =>
+			otherPart.InstanceId != part.InstanceId
+			&& ContainsPoint(otherPart, portPosition));
 	}
 
 	private bool IsPortOccupied(string partId, string portId)
@@ -2169,7 +2332,7 @@ public partial class ShipAssembly : Node2D
 		ShipPartDefinition definition = CreateBaseDefinition(
 			"structural_hull_2x2",
 			"4×4 Hull");
-		definition.Description = "A rotatable 4×4 structural hull panel with 2×2 and 1×1 ports along each straight face.";
+		definition.Description = "A rotatable 4×4 structural hull panel with centered and offset 2×2 ports plus 1×1 ports along each straight face.";
 		definition.Tags.Add("structural");
 		definition.Tags.Add("hull");
 		definition.Tags.Add("large");
@@ -2383,6 +2546,7 @@ public partial class ShipAssembly : Node2D
 			? Vector2.Right
 			: Vector2.Down;
 		string side = facing.ToString().ToLowerInvariant();
+		definition.MountPorts.Add(CreatePort($"{side}-center", center, facing));
 		foreach (int offset in new[] { -128, 128 })
 		{
 			Vector2 position = center + tangent * offset;
@@ -2526,4 +2690,15 @@ public partial class ShipAssembly : Node2D
 		MountPortDefinition PartPort,
 		Vector2 PartPosition,
 		int RotationDegrees);
+
+	private readonly record struct PortCompatibilityKey(
+		int Size,
+		string CompatibilityClass,
+		MountFacing Facing);
+
+	private readonly record struct GroupPlacementPort(
+		ShipPartInstance Part,
+		MountPortDefinition Port,
+		Vector2 Position,
+		MountFacing Facing);
 }

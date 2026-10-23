@@ -1,7 +1,9 @@
 using System;
 using System.Collections.Generic;
 using System.Globalization;
+using System.IO;
 using Godot;
+using Higherfleet.Ships.Model;
 using Higherfleet.Ships.Parts;
 
 namespace Higherfleet.Ships.View;
@@ -17,6 +19,12 @@ public partial class ShipBuilderDemo : Node2D
 	private Label _massLabel;
 	private Label _selectedPartLabel;
 	private MenuButton _commandMenuButton;
+	private Button _saveButton;
+	private Button _loadButton;
+	private FileDialog _saveDialog;
+	private FileDialog _loadDialog;
+	private ConfirmationDialog _loadConfirmation;
+	private string _pendingLoadPath = string.Empty;
 	private readonly List<BaseButton> _catalogButtons = new();
 	private bool _isPanning;
 
@@ -29,6 +37,15 @@ public partial class ShipBuilderDemo : Node2D
 		UpdateStatus(string.IsNullOrEmpty(_ship.InitializationError)
 			? "Place components, then use ROUTING to draw explicit grid-based power or fuel conduits inside the hull."
 			: _ship.InitializationError);
+		try
+		{
+			ShipDesignPersistence.EnsureSaveDirectory();
+		}
+		catch (IOException exception)
+		{
+			GD.PushError($"Could not prepare ship save directory: {exception}");
+			UpdateStatus($"Ship saving is unavailable: {exception.Message}");
+		}
 		UpdateCatalogButtons();
 	}
 
@@ -214,9 +231,18 @@ public partial class ShipBuilderDemo : Node2D
 		}
 		else
 		{
-			if (_ship.TryPickUpPartAt(shipPosition, false, out string pickupReason))
+			bool copyModifierPressed = OS.GetName() == "macOS"
+				? mouseEvent.MetaPressed
+				: mouseEvent.CtrlPressed;
+			string pickupReason;
+			bool pickedUp = copyModifierPressed
+				? _ship.TryCopyPartAt(shipPosition, out pickupReason)
+				: _ship.TryPickUpPartAt(shipPosition, false, out pickupReason);
+			if (pickedUp)
 			{
-				UpdateStatus($"{pickupReason} Detached subassemblies: {_ship.DetachedSubassemblyCount}.");
+				UpdateStatus(copyModifierPressed
+					? pickupReason
+					: $"{pickupReason} Detached subassemblies: {_ship.DetachedSubassemblyCount}.");
 			}
 			else
 			{
@@ -251,10 +277,21 @@ public partial class ShipBuilderDemo : Node2D
 
 		Label help = new()
 		{
-			Text = "Choose a part from the catalog, then click to place or snap it. Press Q/E or scroll while holding to rotate. Use ROUTING to draw conduits and place routing markers. Middle-drag to pan; scroll otherwise to zoom."
+			Text = "Save and load ship designs as JSON files. Choose a part from the catalog, then click to place or snap it. Control-click a placed part to copy it. Press Q/E or scroll while holding to rotate. Use ROUTING to draw conduits and place routing markers. Middle-drag to pan; scroll otherwise to zoom."
 		};
 		help.AutowrapMode = TextServer.AutowrapMode.WordSmart;
 		content.AddChild(help);
+
+		HBoxContainer persistenceButtons = new();
+		persistenceButtons.AddThemeConstantOverride("separation", 8);
+		content.AddChild(persistenceButtons);
+		_saveButton = new Button { Text = "SAVE SHIP", SizeFlagsHorizontal = Control.SizeFlags.ExpandFill };
+		_saveButton.Pressed += () => _saveDialog.PopupCentered();
+		persistenceButtons.AddChild(_saveButton);
+		_loadButton = new Button { Text = "LOAD SHIP", SizeFlagsHorizontal = Control.SizeFlags.ExpandFill };
+		_loadButton.Pressed += () => _loadDialog.PopupCentered();
+		persistenceButtons.AddChild(_loadButton);
+		BuildPersistenceDialogs(layer);
 
 		Label statsTitle = new()
 		{
@@ -313,6 +350,40 @@ public partial class ShipBuilderDemo : Node2D
 		CreateInternalCategoryMenu(categories);
 		CreateCommandCategoryMenu(categories);
 		CreateRoutingCategoryMenu(categories);
+	}
+
+	private void BuildPersistenceDialogs(CanvasLayer layer)
+	{
+		_saveDialog = new FileDialog
+		{
+			Title = "Save Ship Design",
+			FileMode = FileDialog.FileModeEnum.SaveFile,
+			Access = FileDialog.AccessEnum.Userdata,
+			CurrentDir = ShipDesignPersistence.SaveDirectory,
+			CurrentFile = "ship.json"
+		};
+		_saveDialog.AddFilter("*.json", "Ship designs");
+		_saveDialog.FileSelected += SaveShipDesign;
+		layer.AddChild(_saveDialog);
+
+		_loadDialog = new FileDialog
+		{
+			Title = "Load Ship Design",
+			FileMode = FileDialog.FileModeEnum.OpenFile,
+			Access = FileDialog.AccessEnum.Userdata,
+			CurrentDir = ShipDesignPersistence.SaveDirectory
+		};
+		_loadDialog.AddFilter("*.json", "Ship designs");
+		_loadDialog.FileSelected += ConfirmLoadShipDesign;
+		layer.AddChild(_loadDialog);
+
+		_loadConfirmation = new ConfirmationDialog
+		{
+			Title = "Load Ship Design",
+			DialogText = "Loading this design will replace the current ship."
+		};
+		_loadConfirmation.Confirmed += LoadPendingShipDesign;
+		layer.AddChild(_loadConfirmation);
 	}
 
 	private void CreateHullCategoryMenu(Control parent)
@@ -432,6 +503,57 @@ public partial class ShipBuilderDemo : Node2D
 	{
 		_ship.BeginNewStructuralHullPlacement(GetShipLocalMousePosition());
 		StartCatalogPlacementStatus("2×2 hull");
+	}
+
+	private void SaveShipDesign(string path)
+	{
+		if (!path.EndsWith(".json", StringComparison.OrdinalIgnoreCase))
+			path += ".json";
+
+		try
+		{
+			ShipDesignPersistence.SaveToFile(path, _ship.Design);
+			UpdateStatus($"Ship saved to {path}.");
+		}
+		catch (IOException exception)
+		{
+			GD.PushError($"Could not save ship design '{path}': {exception}");
+			UpdateStatus($"Could not save ship: {exception.Message}");
+		}
+	}
+
+	private void ConfirmLoadShipDesign(string path)
+	{
+		_pendingLoadPath = path;
+		_loadConfirmation.DialogText =
+			$"Load '{Path.GetFileName(path)}' and replace the current ship? This cannot be undone.";
+		_loadConfirmation.PopupCentered();
+	}
+
+	private void LoadPendingShipDesign()
+	{
+		string path = _pendingLoadPath;
+		_pendingLoadPath = string.Empty;
+		if (string.IsNullOrWhiteSpace(path))
+			return;
+
+		try
+		{
+			ShipDesign design = ShipDesignPersistence.LoadFromFile(path, _ship.ResolvePartDefinition);
+			_ship.ReplaceDesign(design);
+			UpdateStatus($"Loaded ship from {path}.");
+			UpdateCatalogButtons();
+		}
+		catch (IOException exception)
+		{
+			GD.PushError($"Could not load ship design '{path}': {exception}");
+			UpdateStatus($"Could not load ship: {exception.Message}");
+		}
+		catch (InvalidDataException exception)
+		{
+			GD.PushError($"Could not load ship design '{path}': {exception}");
+			UpdateStatus($"Could not load ship: {exception.Message}");
+		}
 	}
 
 	private void StartHalfHullPlacement()
@@ -557,6 +679,9 @@ public partial class ShipBuilderDemo : Node2D
 		foreach (BaseButton button in _catalogButtons)
 			button.Disabled = catalogDisabled;
 		_commandMenuButton.Disabled = catalogDisabled || !_ship.CanAddRootPart;
+		bool persistenceDisabled = catalogDisabled || _ship.IsRouting;
+		_saveButton.Disabled = persistenceDisabled;
+		_loadButton.Disabled = persistenceDisabled;
 	}
 
 	private void UpdateMassReadout()

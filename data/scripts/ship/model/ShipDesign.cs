@@ -14,8 +14,10 @@ public sealed class ShipDesign
 	private readonly List<LogisticsJunction> _logisticsJunctions = new();
 	private readonly List<LogisticsPassOver> _logisticsPassOvers = new();
 	private readonly List<LogisticsPassThrough> _logisticsPassThroughs = new();
+	private IReadOnlyList<ShipSubassembly> _subassemblies;
 
 	public string DesignId { get; }
+	internal int StructureRevision { get; private set; }
 	public string RootPartInstanceId { get; private set; } = string.Empty;
 	public IReadOnlyList<ShipPartInstance> Parts => _parts;
 	public IReadOnlyList<PhysicalConnection> Connections => _connections;
@@ -50,6 +52,7 @@ public sealed class ShipDesign
 		}
 
 		_parts.Add(part);
+		InvalidateStructure();
 	}
 
 	public void SetRootPart(string instanceId)
@@ -60,23 +63,29 @@ public sealed class ShipDesign
 		}
 
 		RootPartInstanceId = instanceId;
+		InvalidateStructure();
 	}
 
 	public void ClearRootPart()
 	{
 		RootPartInstanceId = string.Empty;
+		InvalidateStructure();
 	}
 
 	public void AddConnection(PhysicalConnection connection)
 	{
 		ArgumentNullException.ThrowIfNull(connection);
 		_connections.Add(connection);
+		InvalidateStructure();
 	}
 
 	public bool RemoveConnection(PhysicalConnection connection)
 	{
 		ArgumentNullException.ThrowIfNull(connection);
-		return _connections.Remove(connection);
+		bool removed = _connections.Remove(connection);
+		if (removed)
+			InvalidateStructure();
+		return removed;
 	}
 
 	public void AddLogisticsRoute(LogisticsRoute route)
@@ -211,6 +220,7 @@ public sealed class ShipDesign
 		{
 			return 0;
 		}
+		InvalidateStructure();
 
 		if (idsToRemove.Contains(RootPartInstanceId))
 		{
@@ -229,6 +239,9 @@ public sealed class ShipDesign
 
 	public IReadOnlyList<ShipSubassembly> GetSubassemblies()
 	{
+		if (_subassemblies != null)
+			return _subassemblies;
+
 		Dictionary<string, ShipPartInstance> partsById = _parts.ToDictionary(part => part.InstanceId);
 		Dictionary<string, List<string>> neighbors = _parts.ToDictionary(
 			part => part.InstanceId,
@@ -273,6 +286,13 @@ public sealed class ShipDesign
 			subassemblies.Add(new ShipSubassembly(componentParts, containsRoot));
 		}
 
-		return subassemblies;
+		_subassemblies = subassemblies;
+		return _subassemblies;
+	}
+
+	private void InvalidateStructure()
+	{
+		_subassemblies = null;
+		StructureRevision++;
 	}
 }
